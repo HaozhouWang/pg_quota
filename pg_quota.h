@@ -15,7 +15,7 @@ extern void init_fs_model(void);
 extern void init_fs_model_shmem(void);
 extern void refresh_fs_model(void);
 extern void getNotifyEvent(int fd);
-extern int initNotifyEvent();
+extern int initiNotifyEvent();
 
 extern void UpdateRelOwner(RelFileNode *rnode, Oid owner);
 extern void UpdateOrphans(void);

@@ -139,7 +139,8 @@ static bool isRelDataFile(const char *path, RelFileNode *rnode);
 static void RemoveFileSize(FileSizeEntry *fsentry);
 static void UpdateFileSize(RelFileNode *rnode, char *filename, off_t newsize);
 void getNotifyEvent(int fd);
-int initNotifyEvent();
+static void inotifyUpdateFileSize(char *dirpath, char *filePath);
+int initiNotifyEvent(void);
 
 char *dirlist[1024];
 int  wdlist[1024];
@@ -147,9 +148,9 @@ static int wd_index;
 
 
 int
-initNotifyEvent()
+initiNotifyEvent()
 {
-	int fd, wd;
+	int fd;
 	fd = inotify_init();
 
 	if ( fd < 0 ) {
@@ -158,16 +159,17 @@ initNotifyEvent()
 
 	for (int i = 0; i < wd_index; i++)
 	{
-		wdlist[i] = inotify_add_watch(fd, dirlist[i], IN_CREATE | IN_DELETE);
+		char path[1024];
+		snprintf(path, 1024, "/home/gpadmin/pg_data/%s", dirlist[i]);
+		
+		wdlist[i] = inotify_add_watch(fd, path, IN_CREATE | IN_DELETE | IN_MODIFY);
 
 		if (wdlist[i] == -1)
 			elog(ERROR, "Could not watch selected directory %s", dirlist[i]);
 
-		elog(DEBUG1, "Watching %s using wd %d", dirlist[i], wd);
+		elog(DEBUG1, "Watching %s using wd %d", dirlist[i], wdlist[i]);
 
 	}
-
-
 	return fd;
 }
 
@@ -549,19 +551,21 @@ inotifyUpdateFileSize(char *dirpath, char *filePath)
 
 	snprintf(path, MAXPGPATH, "%s/%s", dirpath, filePath);
 
-	if (!isRelDataFile(filePath, &rnode))
+	if (!isRelDataFile(path, &rnode))
 		return;
 
 	/* Also ignore system relations */
 	if (rnode.relNode < FirstNormalObjectId)
 		return;
 
-	if (stat(filePath, &statbuf) != 0) {
+	if (stat(path, &statbuf) != 0) {
 		ereport(DEBUG1,
 		        (errcode_for_file_access(),
-			        errmsg("could not stat file \"%s\": %m", filePath)));
+			        errmsg("could not stat file \"%s\": %m", path)));
 		return;
 	}
+
+	generation++;
 
 	UpdateFileSize(&rnode, filePath, statbuf.st_size);
 }

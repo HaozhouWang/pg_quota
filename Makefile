@@ -17,6 +17,8 @@ PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
+override CFLAGS += -std=c99
+
 # FIXME: This overrides the 'check' target from the pgxs makefile.
 # That produces a warning: overriding recipe for target 'check'.
 # I don't how to do this better. We could use a different makefile

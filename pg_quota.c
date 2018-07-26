@@ -254,7 +254,7 @@ pg_quota_worker_main(Datum main_arg)
 			 */
 			pgstat_report_activity(STATE_RUNNING, "scanning datadir");
 			refresh_fs_model();
-			fd = initNotifyEvent();
+			fd = initiNotifyEvent();
 
 			/*
 			 * Start a transaction on which we can run queries.  Note that each
