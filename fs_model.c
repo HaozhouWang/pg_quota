@@ -11,6 +11,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/inotify.h>
 
 #include "access/transam.h"
 #include "catalog/pg_tablespace_d.h"
@@ -30,6 +33,9 @@
 #include "pg_quota.h"
 
 #define MAX_DB_ROLE_ENTRIES 1024
+
+#define NOTIFY_EVENT_SIZE  ( sizeof (struct inotify_event) )
+#define BUF_LEN     ( 1024 * ( NOTIFY_EVENT_SIZE + 16 ) )
 
 PG_FUNCTION_INFO_V1(get_quota_status);
 
@@ -132,6 +138,66 @@ static void pg_quota_shmem_startup(void);
 static bool isRelDataFile(const char *path, RelFileNode *rnode);
 static void RemoveFileSize(FileSizeEntry *fsentry);
 static void UpdateFileSize(RelFileNode *rnode, char *filename, off_t newsize);
+void getNotifyEvent(int fd);
+int initNotifyEvent();
+
+char *dirlist[1024];
+int  wdlist[1024];
+static int wd_index;
+
+
+int
+initNotifyEvent()
+{
+	int fd, wd;
+	fd = inotify_init();
+
+	if ( fd < 0 ) {
+		elog(ERROR, "ERROR to init inotify event");
+	}
+
+	for (int i = 0; i < wd_index; i++)
+	{
+		wdlist[i] = inotify_add_watch(fd, dirlist[i], IN_CREATE | IN_DELETE);
+
+		if (wdlist[i] == -1)
+			elog(ERROR, "Could not watch selected directory %s", dirlist[i]);
+
+		elog(DEBUG1, "Watching %s using wd %d", dirlist[i], wd);
+
+	}
+
+
+	return fd;
+}
+
+void
+getNotifyEvent(int fd)
+{
+	ssize_t numRead;
+	char buffer[BUF_LEN];
+	char *p;
+	struct inotify_event *event;
+
+	numRead = read(fd, buffer, BUF_LEN);
+	if (numRead > 0)
+	{
+		for (p = buffer; p < buffer + numRead; ) {
+			event = (struct inotify_event *) p;
+
+			for (int i = 0; i < wd_index; i ++)
+			{
+				if(event->wd == wdlist[i])
+				{
+					inotifyUpdateFileSize(dirlist[i], event->name);
+				}
+			}
+			p += sizeof(struct inotify_event) + event->len;
+		}
+
+	}
+
+}
 
 /*
  * Does it look like a relation data file?
@@ -474,6 +540,32 @@ UpdateFileSize(RelFileNode *rnode, char *path, off_t newsize)
 	}
 }
 
+static void
+inotifyUpdateFileSize(char *dirpath, char *filePath)
+{
+	RelFileNode rnode;
+	struct stat statbuf;
+	char		path[MAXPGPATH];
+
+	snprintf(path, MAXPGPATH, "%s/%s", dirpath, filePath);
+
+	if (!isRelDataFile(filePath, &rnode))
+		return;
+
+	/* Also ignore system relations */
+	if (rnode.relNode < FirstNormalObjectId)
+		return;
+
+	if (stat(filePath, &statbuf) != 0) {
+		ereport(DEBUG1,
+		        (errcode_for_file_access(),
+			        errmsg("could not stat file \"%s\": %m", filePath)));
+		return;
+	}
+
+	UpdateFileSize(&rnode, filePath, statbuf.st_size);
+}
+
 /*
  * helper function for refresh_fs_model(), to scan one directory.
  */
@@ -535,6 +627,8 @@ refresh_fs_model(void)
 	HASH_SEQ_STATUS iter;
 	FileSizeEntry *fsentry;
 
+	wd_index = 0;
+
 	/*
 	 * Bump the generation counter first, so that we can detect removed files.
 	 */
@@ -557,6 +651,8 @@ refresh_fs_model(void)
 			continue;
 
 		snprintf(path, MAXPGPATH, "base/%s", dirent->d_name);
+		dirlist[wd_index] = pstrdup(path);
+		wd_index++;
 		RebuildRelSizeMapDir(path);
 	}
 	FreeDir(dirdesc);

@@ -186,6 +186,8 @@ void
 pg_quota_worker_main(Datum main_arg)
 {
 	char	   *dbname = MyBgworkerEntry->bgw_extra;
+	bool       ifInit =  false;
+	int        fd;
 
 	/* Establish signal handlers before unblocking signals. */
 	pqsignal(SIGHUP, pg_quota_sighup);
@@ -241,52 +243,65 @@ pg_quota_worker_main(Datum main_arg)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
-		/*
-		 * Rescan the data directory.
-		 */
-		pgstat_report_activity(STATE_RUNNING, "scanning datadir");
-		refresh_fs_model();
+		if (ifInit){
+			pgstat_report_activity(STATE_RUNNING, "receiving inotify events");
+			getNotifyEvent(fd);
+		} else {
 
-		/*
-		 * Start a transaction on which we can run queries.  Note that each
-		 * StartTransactionCommand() call should be preceded by a
-		 * SetCurrentStatementStartTimestamp() call, which sets both the time
-		 * for the statement we're about the run, and also the transaction
-		 * start time.  Also, each other query sent to SPI should probably be
-		 * preceded by SetCurrentStatementStartTimestamp(), so that statement
-		 * start time is always up to date.
-		 *
-		 * The SPI_connect() call lets us run queries through the SPI manager,
-		 * and the PushActiveSnapshot() call creates an "active" snapshot
-		 * which is necessary for queries to have MVCC data to work on.
-		 *
-		 * The pgstat_report_activity() call makes our activity visible
-		 * through the pgstat views.
-		 */
-		SetCurrentStatementStartTimestamp();
-		StartTransactionCommand();
-		SPI_connect();
-		PushActiveSnapshot(GetTransactionSnapshot());
+			/*
+			 * Rescan the data directory.
+			 */
+			pgstat_report_activity(STATE_RUNNING, "scanning datadir");
+			refresh_fs_model();
+			fd = initNotifyEvent();
 
-		pgstat_report_activity(STATE_RUNNING, "scanning pg_class");
+			/*
+			 * Start a transaction on which we can run queries.  Note that each
+			 * StartTransactionCommand() call should be preceded by a
+			 * SetCurrentStatementStartTimestamp() call, which sets both the time
+			 * for the statement we're about the run, and also the transaction
+			 * start time.  Also, each other query sent to SPI should probably be
+			 * preceded by SetCurrentStatementStartTimestamp(), so that statement
+			 * start time is always up to date.
+			 *
+			 * The SPI_connect() call lets us run queries through the SPI manager,
+			 * and the PushActiveSnapshot() call creates an "active" snapshot
+			 * which is necessary for queries to have MVCC data to work on.
+			 *
+			 * The pgstat_report_activity() call makes our activity visible
+			 * through the pgstat views.
+			 */
+			SetCurrentStatementStartTimestamp();
+			StartTransactionCommand();
+			SPI_connect();
+			PushActiveSnapshot(GetTransactionSnapshot());
 
-		/*
-		 * If there are any relfilenodes for which we don't know the owner, look
-		 * them up.
-		 */
-		UpdateOrphans();
+			pgstat_report_activity(STATE_RUNNING, "scanning pg_class");
 
-		pgstat_report_activity(STATE_RUNNING, "loading quota configuration");
-		load_quotas();
+			/*
+			 * If there are any relfilenodes for which we don't know the owner, look
+			 * them up.
+			 */
+			UpdateOrphans();
 
-		/*
-		 * And finish our transaction.
-		 */
-		SPI_finish();
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-		pgstat_report_stat(false);
-		pgstat_report_activity(STATE_IDLE, NULL);
+			pgstat_report_activity(STATE_RUNNING, "loading quota configuration");
+			load_quotas();
+
+			/*
+			 * And finish our transaction.
+			 */
+			SPI_finish();
+			PopActiveSnapshot();
+			CommitTransactionCommand();
+
+			/* the hash table init finished */
+			ifInit = true;
+
+			pgstat_report_stat(false);
+			pgstat_report_activity(STATE_IDLE, NULL);
+
+		}
+
 	}
 
 	proc_exit(1);
