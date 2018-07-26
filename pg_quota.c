@@ -214,7 +214,7 @@ pg_quota_worker_main(Datum main_arg)
 	 */
 	while (!got_sigterm)
 	{
-		int			rc;
+		int			rc = 0;
 
 		/*
 		 * Background workers mustn't call usleep() or any direct equivalent:
@@ -222,12 +222,13 @@ pg_quota_worker_main(Datum main_arg)
 		 * necessary, but is awakened if postmaster dies.  That way the
 		 * background process goes away immediately in an emergency.
 		 */
+		/*
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 					   pg_quota_refresh_naptime * 1000L,
 					   PG_WAIT_EXTENSION);
 		ResetLatch(MyLatch);
-
+		*/
 		/* emergency bailout if postmaster has died */
 		if (rc & WL_POSTMASTER_DEATH)
 			proc_exit(1);
